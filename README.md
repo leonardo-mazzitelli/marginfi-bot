@@ -10,4 +10,5 @@ Environment variables are used to configure the application, making it easier to
 tbd
 
 # Run
-tbd
+- Main liquidator flow: `cargo run`
+- Quick Geyser connectivity probe: source your `.env` (at minimum `GEYSER_ENDPOINT` and `GEYSER_X_TOKEN`) and run `cargo run --bin geyser_probe`. The probe creates a short-lived subscription that only listens for Solana clock updates, making it a fast way to verify whether your Yellowstone provider credentials work before launching the full service. Use `GEYSER_PROBE_TIMEOUT_SEC` to tweak the wait time if needed.

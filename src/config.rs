@@ -10,6 +10,8 @@ pub struct Config {
     pub rpc_url: String,
     pub geyser_endpoint: String,
     pub geyser_x_token: String,
+    pub cache_snapshot_path: String,
+    pub cache_snapshot_interval_sec: u64,
 }
 
 impl Config {
@@ -47,6 +49,13 @@ impl Config {
         let geyser_x_token = std::env::var("GEYSER_X_TOKEN")
             .expect("GEYSER_X_TOKEN environment variable is not set");
 
+        let cache_snapshot_path = std::env::var("CACHE_SNAPSHOT_PATH")
+            .expect("CACHE_SNAPSHOT_PATH environment variable is not set");
+        let cache_snapshot_interval_sec = std::env::var("CACHE_SNAPSHOT_INTERVAL_SEC")
+            .expect("CACHE_SNAPSHOT_INTERVAL_SEC environment variable is not set")
+            .parse::<u64>()
+            .expect("Invalid CACHE_SNAPSHOT_INTERVAL_SEC value, must be a number");
+
         Ok(Config {
             wallet,
             marginfi_program_id,
@@ -55,6 +64,8 @@ impl Config {
             rpc_url,
             geyser_endpoint,
             geyser_x_token,
+            cache_snapshot_path,
+            cache_snapshot_interval_sec,
         })
     }
 }
@@ -68,7 +79,9 @@ impl std::fmt::Display for Config {
             - marginfi_program_id: {} \n\
             - lut_addresses: [{}] \n\
             - stats_interval_sec: {} \n\
-            - geyser_endpoint: {}",
+            - geyser_endpoint: {} \n\
+            - cache_snapshot_path: {} \n\
+            - cache_snapshot_interval_sec: {}",
             self.wallet.pubkey(),
             self.marginfi_program_id,
             self.lut_addresses
@@ -77,7 +90,9 @@ impl std::fmt::Display for Config {
                 .collect::<Vec<_>>()
                 .join(", "),
             self.stats_interval_sec,
-            self.geyser_endpoint
+            self.geyser_endpoint,
+            self.cache_snapshot_path,
+            self.cache_snapshot_interval_sec,
         )
     }
 }
@@ -95,6 +110,8 @@ pub mod test_util {
     pub const TEST_RPC_URL: &str = "http://dummy_rpc_url";
     pub const TEST_GEYSER_ENDPOINT: &str = "http://dummy_geyser_endpoint";
     pub const TEST_GEYSER_X_TOKEN: &str = "dummy_x_token";
+    pub const TEST_CACHE_SNAPSHOT_PATH: &str = "test_snapshot.bin";
+    pub const TEST_CACHE_SNAPSHOT_INTERVAL_SEC: &str = "600";
 
     pub fn set_test_env() {
         env::set_var(
@@ -114,6 +131,11 @@ pub mod test_util {
         env::set_var("RPC_URL", TEST_RPC_URL);
         env::set_var("GEYSER_ENDPOINT", TEST_GEYSER_ENDPOINT);
         env::set_var("GEYSER_X_TOKEN", TEST_GEYSER_X_TOKEN);
+        env::set_var("CACHE_SNAPSHOT_PATH", TEST_CACHE_SNAPSHOT_PATH);
+        env::set_var(
+            "CACHE_SNAPSHOT_INTERVAL_SEC",
+            TEST_CACHE_SNAPSHOT_INTERVAL_SEC,
+        );
     }
 
     pub fn remove_env(key: &str) {
@@ -128,6 +150,8 @@ pub mod test_util {
         let rpc_url = "http://dummy_rpc_url".into();
         let geyser_endpoint = "http://dummy_geyser_endpoint".into();
         let geyser_x_token = "dummy_x_token".into();
+        let cache_snapshot_path = "test_snapshot.bin".into();
+        let cache_snapshot_interval_sec = 600;
 
         Config {
             wallet,
@@ -137,6 +161,8 @@ pub mod test_util {
             rpc_url,
             geyser_endpoint,
             geyser_x_token,
+            cache_snapshot_path,
+            cache_snapshot_interval_sec,
         }
     }
 }
@@ -144,8 +170,9 @@ pub mod test_util {
 #[cfg(test)]
 mod tests {
     use crate::config::test_util::{
-        remove_env, set_test_env, TEST_GEYSER_ENDPOINT, TEST_GEYSER_X_TOKEN,
-        TEST_MARGINFI_PROGRAM_ID, TEST_RPC_URL, TEST_STATS_INTERVAL_SEC,
+        remove_env, set_test_env, TEST_CACHE_SNAPSHOT_INTERVAL_SEC, TEST_CACHE_SNAPSHOT_PATH,
+        TEST_GEYSER_ENDPOINT, TEST_GEYSER_X_TOKEN, TEST_MARGINFI_PROGRAM_ID, TEST_RPC_URL,
+        TEST_STATS_INTERVAL_SEC,
     };
 
     use serial_test::serial;
@@ -170,6 +197,11 @@ mod tests {
         assert_eq!(config.rpc_url, TEST_RPC_URL);
         assert_eq!(config.geyser_endpoint, TEST_GEYSER_ENDPOINT);
         assert_eq!(config.geyser_x_token, TEST_GEYSER_X_TOKEN);
+        assert_eq!(config.cache_snapshot_path, TEST_CACHE_SNAPSHOT_PATH);
+        assert_eq!(
+            config.cache_snapshot_interval_sec,
+            TEST_CACHE_SNAPSHOT_INTERVAL_SEC.parse::<u64>().unwrap()
+        );
     }
 
     #[test]
@@ -223,6 +255,33 @@ mod tests {
     fn test_config_missing_geyser_x_token() {
         set_test_env();
         remove_env("GEYSER_X_TOKEN");
+        let _ = Config::new();
+    }
+
+    #[test]
+    #[serial]
+    #[should_panic(expected = "CACHE_SNAPSHOT_PATH environment variable is not set")]
+    fn test_config_missing_cache_snapshot_path() {
+        set_test_env();
+        remove_env("CACHE_SNAPSHOT_PATH");
+        let _ = Config::new();
+    }
+
+    #[test]
+    #[serial]
+    #[should_panic(expected = "CACHE_SNAPSHOT_INTERVAL_SEC environment variable is not set")]
+    fn test_config_missing_cache_snapshot_interval() {
+        set_test_env();
+        remove_env("CACHE_SNAPSHOT_INTERVAL_SEC");
+        let _ = Config::new();
+    }
+
+    #[test]
+    #[serial]
+    #[should_panic(expected = "Invalid CACHE_SNAPSHOT_INTERVAL_SEC value, must be a number")]
+    fn test_config_invalid_cache_snapshot_interval() {
+        set_test_env();
+        env::set_var("CACHE_SNAPSHOT_INTERVAL_SEC", "abc");
         let _ = Config::new();
     }
 

@@ -34,6 +34,7 @@ impl MintsCache {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn get(&self, address: &Pubkey) -> Result<Option<CachedMint>> {
         Ok(self
             .mints

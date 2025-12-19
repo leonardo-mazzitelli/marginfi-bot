@@ -19,6 +19,7 @@ impl LutsCache {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn get_all(&self) -> Result<Vec<AddressLookupTableAccount>> {
         let read_guard = self
             .luts

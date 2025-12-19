@@ -3,25 +3,32 @@ mod geyser_subscriber;
 mod liquidation_service;
 
 use std::{
+    path::PathBuf,
     sync::{atomic::AtomicBool, Arc},
     thread,
+    time::{Duration, Instant},
 };
 
 use crate::{
-    cache::{Cache, CacheLoader},
+    cache::{
+        snapshot::{persist_cache_snapshot, restore_cache_snapshot},
+        Cache, CacheLoader,
+    },
     service::geyser_subscriber::{GeyserMessage, GeyserSubscriber},
 };
 use crate::{comms::CommsClient, service::geyser_processor::GeyserProcessor};
 use crate::{config::Config, service::liquidation_service::LiquidationService};
 use anyhow::Result;
 use bincode::deserialize;
-use log::{error, info};
+use log::{error, info, warn};
 use solana_sdk::clock::Clock;
 use solana_sdk::sysvar;
 
 pub struct ServiceManager<T: CommsClient + 'static> {
     stop: Arc<AtomicBool>,
     stats_interval_sec: u64,
+    snapshot_interval_sec: u64,
+    snapshot_path: PathBuf,
     cache: Arc<Cache>,
     cache_loader: CacheLoader<T>,
     geyser_subscriber: Arc<GeyserSubscriber>,
@@ -60,6 +67,8 @@ impl<T: CommsClient + 'static> ServiceManager<T> {
         Ok(ServiceManager {
             stop,
             stats_interval_sec: config.stats_interval_sec,
+            snapshot_interval_sec: config.cache_snapshot_interval_sec,
+            snapshot_path: PathBuf::from(&config.cache_snapshot_path),
             cache,
             cache_loader,
             geyser_subscriber: Arc::new(geyser_subscriber),
@@ -71,8 +80,35 @@ impl<T: CommsClient + 'static> ServiceManager<T> {
     pub fn start(&self) -> anyhow::Result<()> {
         info!("Starting services...");
 
-        info!("Inflating the Cache...");
-        self.cache_loader.load_cache()?;
+        let snapshot_path = self.snapshot_path.as_path();
+        let snapshot_loaded = match restore_cache_snapshot(&self.cache, snapshot_path) {
+            Ok(true) => {
+                info!("Cache snapshot restored from {}", snapshot_path.display());
+                self.cache_loader.load_auxiliary_accounts()?;
+                true
+            }
+            Ok(false) => false,
+            Err(err) => {
+                warn!(
+                    "Failed to restore cache snapshot {}: {}",
+                    snapshot_path.display(),
+                    err
+                );
+                false
+            }
+        };
+
+        if !snapshot_loaded {
+            info!("Inflating the Cache...");
+            self.cache_loader.load_cache()?;
+            if let Err(err) = persist_cache_snapshot(&self.cache, snapshot_path) {
+                warn!(
+                    "Failed to persist initial cache snapshot {}: {}",
+                    snapshot_path.display(),
+                    err
+                );
+            }
+        }
 
         let geyser_processor = self.geyser_processor.clone();
         thread::spawn(move || {
@@ -99,7 +135,19 @@ impl<T: CommsClient + 'static> ServiceManager<T> {
         });
 
         info!("Entering the Main loop.");
+        let mut last_snapshot = Instant::now();
+        let snapshot_interval = Duration::from_secs(self.snapshot_interval_sec);
         while !self.stop.load(std::sync::atomic::Ordering::SeqCst) {
+            if last_snapshot.elapsed() >= snapshot_interval {
+                if let Err(err) = persist_cache_snapshot(&self.cache, snapshot_path) {
+                    warn!(
+                        "Failed to persist cache snapshot {}: {}",
+                        snapshot_path.display(),
+                        err
+                    );
+                }
+                last_snapshot = Instant::now();
+            }
             if let Err(err) = self.log_stats() {
                 eprintln!("Error logging stats: {}", err);
             }

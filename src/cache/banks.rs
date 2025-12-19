@@ -1,5 +1,6 @@
 use std::{collections::HashMap, sync::RwLock};
 
+use anchor_lang::AccountDeserialize;
 use anyhow::{anyhow, Result};
 use log::trace;
 use marginfi::state::{
@@ -9,7 +10,10 @@ use marginfi::state::{
 };
 use solana_sdk::pubkey::Pubkey;
 
-use crate::cache::CacheEntry;
+use crate::cache::{snapshot::SnapshotAccount, CacheEntry};
+use crate::common::{MARGINFI_BANK_DISCRIMINATOR, MARGINFI_BANK_DISCRIMINATOR_LEN};
+use bytemuck::bytes_of;
+use std::mem::size_of;
 
 #[derive(Debug, Clone)]
 pub struct CachedBankOracle {
@@ -98,6 +102,54 @@ impl BanksCache {
             .map(|bank| bank.oracle.clone())
             .collect())
     }
+
+    pub(crate) fn snapshot_entries(&self) -> Result<Vec<SnapshotAccount>> {
+        let banks = self.banks.read().map_err(|e| {
+            anyhow!(
+                "Failed to lock the Banks cache for snapshot generation: {}",
+                e
+            )
+        })?;
+
+        let mut entries = Vec::with_capacity(banks.len());
+        for bank in banks.values() {
+            entries.push(SnapshotAccount::new(
+                bank.address,
+                bank.slot,
+                serialize_bank(&bank.bank),
+            ));
+        }
+
+        Ok(entries)
+    }
+
+    pub(crate) fn restore_from_snapshot(&self, entries: &[SnapshotAccount]) -> Result<()> {
+        self.banks
+            .write()
+            .map_err(|e| anyhow!("Failed to lock Banks cache for reset: {}", e))?
+            .clear();
+
+        for entry in entries {
+            let mut data_slice = entry.data.as_slice();
+            let bank = Bank::try_deserialize(&mut data_slice).map_err(|err| {
+                anyhow!(
+                    "Failed to deserialize Bank {} from snapshot: {}",
+                    entry.address,
+                    err
+                )
+            })?;
+            self.update(entry.slot, entry.address, &bank)?;
+        }
+
+        Ok(())
+    }
+}
+
+fn serialize_bank(bank: &Bank) -> Vec<u8> {
+    let mut data = Vec::with_capacity(MARGINFI_BANK_DISCRIMINATOR_LEN + size_of::<Bank>());
+    data.extend_from_slice(&MARGINFI_BANK_DISCRIMINATOR);
+    data.extend_from_slice(bytes_of(bank));
+    data
 }
 
 fn get_oracle_accounts(bank_config: &BankConfig) -> Vec<Pubkey> {

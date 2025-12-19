@@ -1,12 +1,19 @@
 use std::{collections::HashMap, sync::RwLock};
 
+use anchor_lang::AccountDeserialize;
 use anyhow::{anyhow, Result};
 use fixed::types::I80F48;
-use log::{trace, warn};
+use log::{info, trace, warn};
 use marginfi::state::marginfi_account::{Balance, MarginfiAccount};
 use solana_sdk::pubkey::Pubkey;
+use std::mem::size_of;
 
-use crate::cache::CacheEntry;
+use crate::cache::snapshot::SnapshotAccount;
+use crate::{
+    cache::CacheEntry,
+    common::{MARGINFI_ACCOUNT_DISCRIMINATOR, MARGINFI_ACCOUNT_DISCRIMINATOR_LEN},
+};
+use bytemuck::bytes_of;
 
 #[derive(Clone)]
 pub struct CachedMarginfiAccount {
@@ -139,7 +146,7 @@ impl MarginfiAccountsCache {
     }
 
     pub fn get_accounts_with_health(&self) -> Result<HashMap<Pubkey, i64>> {
-        Ok(self
+        let snapshot = self
             .account_to_health
             .read()
             .map_err(|e| {
@@ -148,8 +155,96 @@ impl MarginfiAccountsCache {
                     e
                 )
             })?
-            .clone())
+            .clone();
+
+        Self::log_health_distribution(&snapshot);
+        Ok(snapshot)
     }
+
+    fn log_health_distribution(accounts: &HashMap<Pubkey, i64>) {
+        let mut hot = 0usize; // HF < 1.1
+        let mut warm = 0usize; // HF < 1.3
+        let mut cold = 0usize; // HF >= 1.3
+        let mut invalid = 0usize;
+
+        for &health in accounts.values() {
+            if health == INVALID_HEALTH {
+                invalid += 1;
+                continue;
+            }
+            let hf = health as f64;
+            if hf < 1.1 {
+                hot += 1;
+            } else if hf < 1.3 {
+                warm += 1;
+            } else {
+                cold += 1;
+            }
+        }
+
+        info!(
+            "Marginfi accounts health buckets: 🔴 Hot (<1.1): {}, 🟠 Warm (<1.3): {}, 🟢 Cold (>=1.3): {}, ⚪ Invalid: {} (total: {})",
+            hot,
+            warm,
+            cold,
+            invalid,
+            accounts.len()
+        );
+    }
+
+    pub(crate) fn snapshot_entries(&self) -> Result<Vec<SnapshotAccount>> {
+        let accounts = self.accounts.read().map_err(|e| {
+            anyhow!(
+                "Failed to lock the Marginfi accounts cache for snapshot: {}",
+                e
+            )
+        })?;
+
+        let mut entries = Vec::with_capacity(accounts.len());
+        for cached in accounts.values() {
+            entries.push(SnapshotAccount::new(
+                cached.address,
+                cached.slot,
+                serialize_marginfi_account(&cached._marginfi_account),
+            ));
+        }
+
+        Ok(entries)
+    }
+
+    pub(crate) fn restore_from_snapshot(&self, entries: &[SnapshotAccount]) -> Result<()> {
+        self.accounts
+            .write()
+            .map_err(|e| anyhow!("Failed to lock Marginfi accounts cache for reset: {}", e))?
+            .clear();
+        self.account_to_health
+            .write()
+            .map_err(|e| anyhow!("Failed to lock health cache for reset: {}", e))?
+            .clear();
+
+        for entry in entries {
+            let mut data_slice = entry.data.as_slice();
+            let marginfi_account =
+                MarginfiAccount::try_deserialize(&mut data_slice).map_err(|err| {
+                    anyhow!(
+                        "Failed to deserialize Marginfi account {} from snapshot: {}",
+                        entry.address,
+                        err
+                    )
+                })?;
+            self.update(entry.slot, entry.address, marginfi_account)?;
+        }
+
+        Ok(())
+    }
+}
+
+fn serialize_marginfi_account(account: &MarginfiAccount) -> Vec<u8> {
+    let mut data =
+        Vec::with_capacity(MARGINFI_ACCOUNT_DISCRIMINATOR_LEN + size_of::<MarginfiAccount>());
+    data.extend_from_slice(&MARGINFI_ACCOUNT_DISCRIMINATOR);
+    data.extend_from_slice(bytes_of(account));
+    data
 }
 
 #[cfg(test)]

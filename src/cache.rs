@@ -1,5 +1,6 @@
 pub mod banks;
 pub mod marginfi_accounts;
+pub mod snapshot;
 
 mod luts;
 mod mints;
@@ -32,6 +33,7 @@ use crate::{
 };
 
 // TODO: not completely sure that this trait is really needed.
+#[allow(dead_code)]
 pub trait CacheEntry {}
 
 pub struct Cache {
@@ -96,6 +98,10 @@ impl<T: CommsClient> CacheLoader<T> {
     pub fn load_cache(&self) -> Result<()> {
         // Load Marginfi account and banks
         self.load_accounts()?;
+        self.load_auxiliary_accounts()
+    }
+
+    pub fn load_auxiliary_accounts(&self) -> Result<()> {
         self.load_mints()?;
         self.load_oracles()?;
         self.load_luts()?;

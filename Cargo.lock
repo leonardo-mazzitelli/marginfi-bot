@@ -2767,6 +2767,7 @@ dependencies = [
  "log",
  "marginfi",
  "pyth-solana-receiver-sdk",
+ "serde",
  "serde_json",
  "serial_test",
  "signal-hook",
